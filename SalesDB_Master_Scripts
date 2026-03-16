@@ -1,0 +1,403 @@
+-- ============================================================
+-- MSSQL MASTER SCRIPTS - Portfolio Project
+-- Author: Aapka Naam | GitHub: github.com/aapka-username
+-- Database: SalesDB | Data: 5500 rows E-commerce Sales
+-- ============================================================
+
+-- ============================================================
+-- PART 1: DATABASE SETUP
+-- ============================================================
+
+CREATE DATABASE SalesDB;
+GO
+USE SalesDB;
+GO
+
+-- ============================================================
+-- PART 2: TABLE CREATION
+-- ============================================================
+
+CREATE TABLE dbo.SalesData (
+    Order_ID        VARCHAR(20)     NOT NULL,
+    Order_Date      DATE            NOT NULL,
+    Delivery_Date   DATE,
+    Customer_ID     VARCHAR(10),
+    Customer_Name   VARCHAR(100),
+    City            VARCHAR(50),
+    State           VARCHAR(50),
+    Email           VARCHAR(100),
+    Phone           VARCHAR(15),
+    Product_ID      VARCHAR(10),
+    Product_Name    VARCHAR(150),
+    Category        VARCHAR(50),
+    Brand           VARCHAR(50),
+    Quantity        INT,
+    Unit_Price      DECIMAL(10,2),
+    Discount_Pct    DECIMAL(5,2),
+    Discount_Amount DECIMAL(10,2),
+    Subtotal        DECIMAL(10,2),
+    Tax_Pct         DECIMAL(5,2),
+    Tax_Amount      DECIMAL(10,2),
+    Shipping_Charge DECIMAL(10,2),
+    Total_Amount    DECIMAL(10,2),
+    Order_Status    VARCHAR(30),
+    Payment_Method  VARCHAR(30),
+    Platform        VARCHAR(20),
+    Shipping_Mode   VARCHAR(20),
+    Customer_Rating INT,
+    CONSTRAINT PK_SalesData PRIMARY KEY (Order_ID)
+);
+GO
+
+-- ============================================================
+-- PART 3: CSV IMPORT
+-- ============================================================
+
+BULK INSERT dbo.SalesData
+FROM 'D:\Backup_DB\sunil_data\Sales_Ecommerce_Data.csv'
+WITH (
+    FIRSTROW = 2,
+    FIELDTERMINATOR = ',',
+    ROWTERMINATOR = '\n',
+    TABLOCK,
+    CODEPAGE = '65001'
+);
+GO
+
+-- ============================================================
+-- PART 4: BASIC QUERIES
+-- ============================================================
+
+-- 4.1 Data overview
+SELECT TOP 10 * FROM dbo.SalesData;
+
+-- 4.2 Row count
+SELECT COUNT(*) AS Total_Orders FROM dbo.SalesData;
+
+-- 4.3 Total revenue
+SELECT
+    FORMAT(SUM(Total_Amount), 'N2') AS Total_Revenue,
+    FORMAT(AVG(Total_Amount), 'N2') AS Avg_Order_Value,
+    COUNT(*)                         AS Total_Orders
+FROM dbo.SalesData;
+
+-- 4.4 Distinct categories
+SELECT DISTINCT Category FROM dbo.SalesData ORDER BY Category;
+
+-- ============================================================
+-- PART 5: BUSINESS ANALYTICS QUERIES
+-- ============================================================
+
+-- 5.1 Category-wise revenue + market share
+SELECT
+    Category,
+    COUNT(*)                                              AS Orders,
+    SUM(Total_Amount)                                     AS Revenue,
+    ROUND(SUM(Total_Amount) * 100.0
+          / SUM(SUM(Total_Amount)) OVER(), 2)             AS Market_Share_Pct
+FROM dbo.SalesData
+GROUP BY Category
+ORDER BY Revenue DESC;
+
+-- 5.2 Top 10 products by revenue
+SELECT TOP 10
+    Product_Name,
+    Brand,
+    SUM(Quantity)                         AS Units_Sold,
+    SUM(Total_Amount)                     AS Revenue,
+    ROUND(AVG(Customer_Rating), 1)        AS Avg_Rating
+FROM dbo.SalesData
+WHERE Order_Status = 'Delivered'
+GROUP BY Product_Name, Brand
+ORDER BY Revenue DESC;
+
+-- 5.3 City-wise performance
+SELECT TOP 10
+    City,
+    State,
+    COUNT(*)          AS Orders,
+    SUM(Total_Amount) AS Revenue,
+    AVG(Total_Amount) AS Avg_Order
+FROM dbo.SalesData
+GROUP BY City, State
+ORDER BY Revenue DESC;
+
+-- 5.4 Monthly sales trend
+SELECT
+    YEAR(Order_Date)  AS Year,
+    MONTH(Order_Date) AS Month,
+    DATENAME(MONTH, Order_Date) AS Month_Name,
+    COUNT(*)          AS Orders,
+    SUM(Total_Amount) AS Revenue,
+    SUM(Quantity)     AS Units_Sold
+FROM dbo.SalesData
+GROUP BY YEAR(Order_Date), MONTH(Order_Date), DATENAME(MONTH, Order_Date)
+ORDER BY Year, Month;
+
+-- 5.5 Payment method analysis
+SELECT
+    Payment_Method,
+    COUNT(*)                              AS Orders,
+    ROUND(AVG(Total_Amount), 2)           AS Avg_Order_Value,
+    ROUND(COUNT(*) * 100.0
+          / SUM(COUNT(*)) OVER(), 2)      AS Usage_Pct
+FROM dbo.SalesData
+GROUP BY Payment_Method
+ORDER BY Orders DESC;
+
+-- 5.6 Order status breakdown
+SELECT
+    Order_Status,
+    COUNT(*)                              AS Orders,
+    ROUND(COUNT(*) * 100.0
+          / SUM(COUNT(*)) OVER(), 2)      AS Percentage
+FROM dbo.SalesData
+GROUP BY Order_Status
+ORDER BY Orders DESC;
+
+-- ============================================================
+-- PART 6: ADVANCED SQL - WINDOW FUNCTIONS
+-- ============================================================
+
+-- 6.1 Running total revenue
+SELECT
+    Order_Date,
+    Order_ID,
+    Total_Amount,
+    SUM(Total_Amount) OVER (
+        ORDER BY Order_Date
+        ROWS UNBOUNDED PRECEDING
+    ) AS Running_Total
+FROM dbo.SalesData
+WHERE Order_Status = 'Delivered'
+ORDER BY Order_Date;
+
+-- 6.2 Product revenue rank
+SELECT
+    Product_Name,
+    Category,
+    SUM(Total_Amount)                                      AS Revenue,
+    RANK()     OVER (ORDER BY SUM(Total_Amount) DESC)      AS Overall_Rank,
+    RANK()     OVER (PARTITION BY Category
+                     ORDER BY SUM(Total_Amount) DESC)      AS Category_Rank
+FROM dbo.SalesData
+GROUP BY Product_Name, Category
+ORDER BY Overall_Rank;
+
+-- 6.3 YoY Growth %
+WITH Yearly AS (
+    SELECT
+        YEAR(Order_Date)  AS Yr,
+        SUM(Total_Amount) AS Revenue
+    FROM dbo.SalesData
+    GROUP BY YEAR(Order_Date)
+)
+SELECT
+    Yr,
+    ROUND(Revenue, 2)                                      AS Revenue,
+    ROUND(LAG(Revenue) OVER (ORDER BY Yr), 2)              AS Prev_Year_Revenue,
+    ROUND((Revenue - LAG(Revenue) OVER (ORDER BY Yr))
+        / LAG(Revenue) OVER (ORDER BY Yr) * 100, 2)        AS YoY_Growth_Pct
+FROM Yearly
+ORDER BY Yr;
+
+-- 6.4 Top customer per city (using ROW_NUMBER)
+WITH RankedCustomers AS (
+    SELECT
+        City,
+        Customer_Name,
+        SUM(Total_Amount)                                  AS Spent,
+        ROW_NUMBER() OVER (
+            PARTITION BY City
+            ORDER BY SUM(Total_Amount) DESC
+        ) AS RN
+    FROM dbo.SalesData
+    GROUP BY City, Customer_Name
+)
+SELECT City, Customer_Name, Spent
+FROM RankedCustomers
+WHERE RN = 1
+ORDER BY Spent DESC;
+
+-- 6.5 Moving average (7-day)
+SELECT
+    Order_Date,
+    SUM(Total_Amount)                                      AS Daily_Revenue,
+    ROUND(AVG(SUM(Total_Amount)) OVER (
+        ORDER BY Order_Date
+        ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+    ), 2)                                                  AS Moving_Avg_7Day
+FROM dbo.SalesData
+GROUP BY Order_Date
+ORDER BY Order_Date;
+
+-- ============================================================
+-- PART 7: STORED PROCEDURES (DBA Level)
+-- ============================================================
+
+-- 7.1 Sales summary by date range
+CREATE OR ALTER PROCEDURE dbo.usp_SalesSummary
+    @StartDate DATE,
+    @EndDate   DATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT
+        COUNT(*)          AS Total_Orders,
+        SUM(Total_Amount) AS Total_Revenue,
+        AVG(Total_Amount) AS Avg_Order,
+        MAX(Total_Amount) AS Max_Order,
+        MIN(Total_Amount) AS Min_Order
+    FROM dbo.SalesData
+    WHERE Order_Date BETWEEN @StartDate AND @EndDate
+      AND Order_Status = 'Delivered';
+END;
+GO
+
+-- Usage:
+EXEC dbo.usp_SalesSummary @StartDate = '2024-01-01', @EndDate = '2024-12-31';
+
+-- 7.2 Top N products stored procedure
+CREATE OR ALTER PROCEDURE dbo.usp_TopProducts
+    @TopN     INT = 10,
+    @Category VARCHAR(50) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT TOP (@TopN)
+        Product_Name,
+        Category,
+        SUM(Quantity)     AS Units_Sold,
+        SUM(Total_Amount) AS Revenue
+    FROM dbo.SalesData
+    WHERE (@Category IS NULL OR Category = @Category)
+      AND Order_Status = 'Delivered'
+    GROUP BY Product_Name, Category
+    ORDER BY Revenue DESC;
+END;
+GO
+
+-- Usage:
+EXEC dbo.usp_TopProducts @TopN = 5, @Category = 'Electronics';
+
+-- ============================================================
+-- PART 8: VIEWS (DBA Level)
+-- ============================================================
+
+-- 8.1 Monthly dashboard view
+CREATE OR ALTER VIEW dbo.vw_MonthlySales AS
+SELECT
+    YEAR(Order_Date)                AS Year,
+    MONTH(Order_Date)               AS Month,
+    DATENAME(MONTH, Order_Date)     AS Month_Name,
+    COUNT(*)                        AS Orders,
+    SUM(Total_Amount)               AS Revenue,
+    SUM(Quantity)                   AS Units,
+    AVG(Total_Amount)               AS Avg_Order
+FROM dbo.SalesData
+WHERE Order_Status = 'Delivered'
+GROUP BY YEAR(Order_Date), MONTH(Order_Date), DATENAME(MONTH, Order_Date);
+GO
+
+-- 8.2 Product performance view
+CREATE OR ALTER VIEW dbo.vw_ProductPerformance AS
+SELECT
+    Product_Name,
+    Category,
+    Brand,
+    COUNT(*)                        AS Orders,
+    SUM(Quantity)                   AS Units_Sold,
+    SUM(Total_Amount)               AS Revenue,
+    AVG(Customer_Rating)            AS Avg_Rating,
+    SUM(Discount_Amount)            AS Total_Discount_Given
+FROM dbo.SalesData
+GROUP BY Product_Name, Category, Brand;
+GO
+
+-- Usage:
+SELECT * FROM dbo.vw_MonthlySales ORDER BY Year, Month;
+SELECT * FROM dbo.vw_ProductPerformance ORDER BY Revenue DESC;
+
+-- ============================================================
+-- PART 9: INDEXES (Performance Tuning)
+-- ============================================================
+
+-- 9.1 Index on Order_Date (most filtered column)
+CREATE NONCLUSTERED INDEX IX_SalesData_OrderDate
+ON dbo.SalesData (Order_Date)
+INCLUDE (Total_Amount, Order_Status, Category);
+
+-- 9.2 Index on Category
+CREATE NONCLUSTERED INDEX IX_SalesData_Category
+ON dbo.SalesData (Category)
+INCLUDE (Total_Amount, Product_Name, Quantity);
+
+-- 9.3 Check index usage
+SELECT
+    i.name                          AS Index_Name,
+    ius.user_seeks,
+    ius.user_scans,
+    ius.user_lookups,
+    ius.user_updates
+FROM sys.indexes i
+JOIN sys.dm_db_index_usage_stats ius
+    ON i.object_id  = ius.object_id
+    AND i.index_id  = ius.index_id
+WHERE OBJECT_NAME(i.object_id) = 'SalesData';
+
+-- ============================================================
+-- PART 10: DBA MAINTENANCE SCRIPTS
+-- ============================================================
+
+-- 10.1 Full backup
+BACKUP DATABASE SalesDB
+TO DISK = 'C:\Backup\SalesDB_Full.bak'
+WITH FORMAT, COMPRESSION,
+     NAME = 'SalesDB Full Backup',
+     STATS = 10;
+
+-- 10.2 Check database size
+SELECT
+    DB_NAME(database_id)            AS Database_Name,
+    SUM(size * 8.0 / 1024)          AS Size_MB,
+    SUM(size * 8.0 / 1024 / 1024)   AS Size_GB
+FROM sys.master_files
+GROUP BY database_id
+ORDER BY Size_MB DESC;
+
+-- 10.3 Active sessions monitor
+SELECT
+    session_id,
+    login_name,
+    status,
+    cpu_time,
+    memory_usage,
+    total_elapsed_time / 1000       AS Elapsed_Sec,
+    SUBSTRING(st.text, 1, 100)      AS Query_Text
+FROM sys.dm_exec_sessions s
+CROSS APPLY sys.dm_exec_sql_text(s.sql_handle) st
+WHERE is_user_process = 1
+ORDER BY cpu_time DESC;
+
+-- 10.4 Find slow queries
+SELECT TOP 10
+    total_worker_time / execution_count     AS Avg_CPU,
+    total_elapsed_time / execution_count    AS Avg_Duration,
+    execution_count,
+    SUBSTRING(qt.text, 1, 200)             AS Query_Text
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) qt
+ORDER BY Avg_CPU DESC;
+
+-- 10.5 Table row counts
+SELECT
+    t.name                          AS Table_Name,
+    p.rows                          AS Row_Count,
+    SUM(a.total_pages) * 8         AS Total_KB
+FROM sys.tables t
+JOIN sys.indexes i     ON t.object_id = i.object_id
+JOIN sys.partitions p  ON i.object_id = p.object_id AND i.index_id = p.index_id
+JOIN sys.allocation_units a ON p.partition_id = a.container_id
+WHERE t.is_ms_shipped = 0
+GROUP BY t.name, p.rows
+ORDER BY p.rows DESC;
